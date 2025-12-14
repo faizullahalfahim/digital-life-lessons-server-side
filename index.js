@@ -29,6 +29,8 @@ async function run() {
   try {
     const db = client.db("digital_life_lessons");
     const lessonsCollection = db.collection("lessons");
+    const paymentsCollection = db.collection("payments"); 
+    const usersCollection = db.collection("users");
 
     //save lesson to database
     app.post("/lessons", async (req, res) => {
@@ -82,11 +84,64 @@ async function run() {
       res.send({ url: session.url });
     });
     
-    app.post('payment-success',async (req, res) => { 
+    app.post('/payment-success',async (req, res) => { 
       const {sessionId} = req.body;
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
-     console.log(session);
+      const session = await stripe.checkout.sessions.retrieve(sessionId); 
+
+      const lesson = await lessonsCollection.findOne({ _id: new ObjectId(session.metadata.lessonId) });
+
+      const paymentExists = await paymentsCollection.findOne({ transactionId: session.payment_intent });
+
+      if(session.payment_status === 'paid' && session.status === 'complete' && !paymentExists){
+       //save data in db
+       const paymentRecord = {
+        lessonId: session.metadata.lessonId,
+        transactionId: session.payment_intent,
+        customer: session.customer_email,
+        status: 'pending',
+        lessonTitle: lesson.title,
+       }
+        const result = await paymentsCollection.insertOne(paymentRecord);
+      } 
+      res.send({message: 'Payment verified successfully'});
+    //  console.log(session);
     } )
+    
+    //get my lessons by email
+    app.get("/my-lessons/:email", async(req, res) => {
+      const email = req.params.email;
+      const lessons = await lessonsCollection.find({
+        creator: email
+      }).toArray()
+      res.send(lessons);
+    })
+
+    // save or update user info
+    app.post("/users", async(req, res) => {
+      const userData = req.body; 
+      userData.createdAt = new Date().toISOString()
+      userData.last_loggedIn = new Date().toISOString()
+      userData.role = "user"
+      const query = {
+        email: userData.email,
+
+      }
+      const alreadyExists = await usersCollection.findOne({email:userData.email})
+      console.log('user already exists ===> ' ,!!alreadyExists)
+      if(alreadyExists) {
+        console.log('updating user info ..' )
+        const result = await usersCollection.updateOne(query, {
+          $set: {
+            last_loggedIn: new Date(). toISOString(),
+          }
+        })
+        return res.send(result)
+      }
+      console.log('saving new user info')
+ 
+     const result = await usersCollection.insertOne(userData)
+      res.send(userData);
+    })
 
 
     // Send a ping to confirm a successful connection
