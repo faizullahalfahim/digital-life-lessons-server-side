@@ -57,6 +57,7 @@ async function run() {
     const lessonsCollection = db.collection("lessons");
     const paymentsCollection = db.collection("payments");
     const usersCollection = db.collection("users");
+    const commentCollection = db.collection("comments");
 
     //save lesson to database
     app.post("/lessons", async (req, res) => {
@@ -241,6 +242,36 @@ async function run() {
       };
       const result = await usersCollection.updateOne(query, updatedDoc);
       res.send(result);
+    });
+    // delete lesson by id
+    app.delete("/lessons/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await lessonsCollection.deleteOne(query);
+      res.send(result);
+    });
+    //post comment
+    app.post("/comments", async (req, res) => {
+      const commentData = req.body;
+      commentData.lessonId = new ObjectId(commentData.lessonId);
+      const result = await commentCollection.insertOne(commentData);
+      res.send(result);
+    });
+    //get comment
+
+    app.get("/comments/:lessonId", async (req, res) => {
+      try {
+        const id = req.params.lessonId;
+        const query = { lessonId: new ObjectId(id) };
+        const result = await commentCollection
+          .find(query)
+          .sort({ date: -1 })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching comments:", error);
+        res.status(500).send({ message: "Failed to load comments" });
+      }
     });
 
     // Send a ping to confirm a successful connection
