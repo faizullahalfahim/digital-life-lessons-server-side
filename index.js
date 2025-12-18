@@ -191,7 +191,7 @@ async function run() {
     app.get("/users", verifyJWT, async (req, res) => {
       const searchText = req.query.searchText || "";
 
-      const query = searchText
+      const filter = searchText
         ? {
             $or: [
               { displayName: { $regex: searchText, $options: "i" } },
@@ -200,22 +200,48 @@ async function run() {
           }
         : {};
 
-      const users = await usersCollection.find(query).toArray();
+      const users = await usersCollection
+        .aggregate([
+          { $match: filter },
+
+          {
+            $lookup: {
+              from: "lessons",
+              localField: "email",
+              foreignField: "creator",
+              as: "userLessons",
+            },
+          },
+
+          {
+            $addFields: {
+              totalLessons: { $size: "$userLessons" },
+            },
+          },
+
+          {
+            $project: {
+              userLessons: 0,
+            },
+          },
+        ])
+        .toArray();
+
       res.send(users);
     });
     // update user role
-    app.patch('/users/:id/role',verifyJWT,  async (req, res) => {
-            const id = req.params.id;
-            const roleInfo = req.body;
-            const query = { _id: new ObjectId(id) }
-            const updatedDoc = {
-                $set: {
-                    role: roleInfo.role
-                }
-            }
-            const result = await usersCollection.updateOne(query, updatedDoc)
-            res.send(result);
-        })
+    app.patch("/users/:id/role", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      const roleInfo = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          role: roleInfo.role,
+        },
+      };
+      const result = await usersCollection.updateOne(query, updatedDoc);
+      res.send(result);
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
