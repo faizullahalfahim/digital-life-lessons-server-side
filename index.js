@@ -294,7 +294,7 @@ async function run() {
       const result = await favoritesCollection.insertOne(favoriteData);
       res.send(result);
     });
-
+    //get favorites
     app.get("/favorites/:email", verifyJWT, async (req, res) => {
       const email = req.params.email;
 
@@ -316,34 +316,56 @@ async function run() {
     // Update lesson visibility and access level
     app.patch("/lessons/:id", verifyJWT, async (req, res) => {
       const id = req.params.id;
-      const { visibility, accessLevel } = req.body;
+      const { title, description, category, visibility, accessLevel, image } =
+        req.body;
       const query = { _id: new ObjectId(id) };
 
-      const lesson = await lessonsCollection.findOne(query);
-      if (!lesson || lesson.creator !== req.tokenEmail) {
-        return res
-          .status(403)
-          .send({ message: "You don't have permission to update this lesson" });
-      }
-
-      if (accessLevel) {
-        const user = await usersCollection.findOne({ email: req.tokenEmail });
-        if (user.role !== "premium" && accessLevel === "Premium") {
-          return res
-            .status(403)
-            .send({ message: "Only premium users can set premium lessons" });
+      try {
+        const lesson = await lessonsCollection.findOne(query);
+        if (!lesson) {
+          return res.status(404).send({ message: "Lesson not found" });
         }
+
+        if (lesson.creator !== req.tokenEmail) {
+          const user = await usersCollection.findOne({ email: req.tokenEmail });
+          if (user.role !== "admin") {
+            return res
+              .status(403)
+              .send({
+                message: "You don't have permission to update this lesson",
+              });
+          }
+        }
+
+        if (accessLevel && accessLevel.toLowerCase() === "premium") {
+          const user = await usersCollection.findOne({ email: req.tokenEmail });
+          if (user.role !== "premium" && user.role !== "admin") {
+            return res
+              .status(403)
+              .send({
+                message: "Only premium users can set premium access level",
+              });
+          }
+        }
+
+        const updatedDoc = {
+          $set: {
+            ...(title && { title }),
+            ...(description && { description }),
+            ...(category && { category }),
+            ...(visibility && { visibility }),
+            ...(accessLevel && { accessLevel }),
+            ...(image && { image }),
+            updatedAt: new Date().toISOString(),
+          },
+        };
+
+        const result = await lessonsCollection.updateOne(query, updatedDoc);
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
       }
-
-      const updatedDoc = {
-        $set: {},
-      };
-
-      if (visibility) updatedDoc.$set.visibility = visibility;
-      if (accessLevel) updatedDoc.$set.accessLevel = accessLevel;
-
-      const result = await lessonsCollection.updateOne(query, updatedDoc);
-      res.send(result);
     });
 
     // Send a ping to confirm a successful connection
