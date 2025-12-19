@@ -58,6 +58,7 @@ async function run() {
     const paymentsCollection = db.collection("payments");
     const usersCollection = db.collection("users");
     const commentCollection = db.collection("comments");
+    const favoritesCollection = db.collection("favorites");
 
     //save lesson to database
     app.post("/lessons", async (req, res) => {
@@ -272,6 +273,77 @@ async function run() {
         console.error("Error fetching comments:", error);
         res.status(500).send({ message: "Failed to load comments" });
       }
+    });
+
+    //post to favorites
+
+    app.post("/favorites", async (req, res) => {
+      const favoriteData = req.body;
+
+      const query = {
+        userEmail: favoriteData.userEmail,
+        lessonId: favoriteData.lessonId,
+      };
+
+      const alreadyExists = await favoritesCollection.findOne(query);
+
+      if (alreadyExists) {
+        return res.send({ message: "Already added to favorites" });
+      }
+
+      const result = await favoritesCollection.insertOne(favoriteData);
+      res.send(result);
+    });
+
+    app.get("/favorites/:email", verifyJWT, async (req, res) => {
+      const email = req.params.email;
+
+      if (req.tokenEmail !== email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+
+      const query = { userEmail: email };
+      const result = await favoritesCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    app.delete("/favorites/:id", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await favoritesCollection.deleteOne(query);
+      res.send(result);
+    });
+    // Update lesson visibility and access level
+    app.patch("/lessons/:id", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      const { visibility, accessLevel } = req.body;
+      const query = { _id: new ObjectId(id) };
+
+      const lesson = await lessonsCollection.findOne(query);
+      if (!lesson || lesson.creator !== req.tokenEmail) {
+        return res
+          .status(403)
+          .send({ message: "You don't have permission to update this lesson" });
+      }
+
+      if (accessLevel) {
+        const user = await usersCollection.findOne({ email: req.tokenEmail });
+        if (user.role !== "premium" && accessLevel === "Premium") {
+          return res
+            .status(403)
+            .send({ message: "Only premium users can set premium lessons" });
+        }
+      }
+
+      const updatedDoc = {
+        $set: {},
+      };
+
+      if (visibility) updatedDoc.$set.visibility = visibility;
+      if (accessLevel) updatedDoc.$set.accessLevel = accessLevel;
+
+      const result = await lessonsCollection.updateOne(query, updatedDoc);
+      res.send(result);
     });
 
     // Send a ping to confirm a successful connection
