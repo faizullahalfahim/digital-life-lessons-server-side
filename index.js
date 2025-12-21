@@ -59,13 +59,55 @@ async function run() {
     const usersCollection = db.collection("users");
     const commentCollection = db.collection("comments");
     const favoritesCollection = db.collection("favorites");
+    const reportCollection = db.collection("report");
 
     //save lesson to database
-    app.post("/lessons", async (req, res) => {
-      const newLesson = req.body;
-      const result = await lessonsCollection.insertOne(newLesson);
-      console.log(result);
-      res.send(result);
+    app.get("/lessons", async (req, res) => {
+      try {
+        const {
+          page = 0,
+          size = 8,
+          search = "",
+          category = "",
+          emotionalTone = "",
+          sort = "newest",
+        } = req.query;
+
+        const pageNum = parseInt(page);
+        const sizeNum = parseInt(size);
+
+        let query = { visibility: "public" };
+
+        if (search) {
+          query.title = { $regex: search, $options: "i" };
+        }
+        if (category) {
+          query.category = category;
+        }
+        if (emotionalTone) {
+          query.emotionalTone = emotionalTone;
+        }
+
+        let sortOptions = {};
+        if (sort === "newest") {
+          sortOptions = { createdAt: -1 };
+        } else if (sort === "mostSaved") {
+          sortOptions = { favoritesCount: -1 };
+        }
+
+        const lessons = await lessonsCollection
+          .find(query)
+          .sort(sortOptions)
+          .skip(pageNum * sizeNum)
+          .limit(sizeNum)
+          .toArray();
+
+        const count = await lessonsCollection.countDocuments(query);
+
+        res.send({ lessons, count });
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching lessons", error });
+      }
     });
 
     // All lessons related APIs
@@ -87,6 +129,7 @@ async function run() {
     app.post("/payment-checkout-session", async (req, res) => {
       const paymentInfo = req.body;
       const amount = parseInt(paymentInfo.cost) * 100;
+
       const session = await stripe.checkout.sessions.create({
         line_items: [
           {
@@ -94,53 +137,59 @@ async function run() {
               currency: "usd",
               unit_amount: amount,
               product_data: {
-                name: `Please pay for: ${paymentInfo.lessonTitle}`,
+                name: paymentInfo.planName,
               },
             },
             quantity: 1,
           },
         ],
         mode: "payment",
-        metadata: {
-          lessonId: paymentInfo.lessonId,
-        },
         customer_email: paymentInfo.customer.email,
-        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}&lessonId=${paymentInfo.lessonId}`,
-        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled${paymentInfo.lessonId}`,
+        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
       });
-      console.log(paymentInfo);
       res.send({ url: session.url });
     });
 
     app.post("/payment-success", async (req, res) => {
       const { sessionId } = req.body;
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      try {
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-      const lesson = await lessonsCollection.findOne({
-        _id: new ObjectId(session.metadata.lessonId),
-      });
+        if (
+          session.payment_status === "paid" &&
+          session.status === "complete"
+        ) {
+          const userEmail = session.customer_email;
 
-      const paymentExists = await paymentsCollection.findOne({
-        transactionId: session.payment_intent,
-      });
+          const userUpdate = await usersCollection.updateOne(
+            { email: userEmail },
+            { $set: { isPremium: true } }
+          );
 
-      if (
-        session.payment_status === "paid" &&
-        session.status === "complete" &&
-        !paymentExists
-      ) {
-        //save data in db
-        const paymentRecord = {
-          lessonId: session.metadata.lessonId,
-          transactionId: session.payment_intent,
-          customer: session.customer_email,
-          status: "pending",
-          lessonTitle: lesson.title,
-        };
-        const result = await paymentsCollection.insertOne(paymentRecord);
+          const paymentRecord = {
+            userEmail,
+            transactionId: session.payment_intent,
+            amount: session.amount_total / 100,
+            currency: session.currency,
+            timestamp: new Date().toISOString(),
+            plan: "Lifetime Premium",
+            status: "completed",
+          };
+
+          await paymentsCollection.updateOne(
+            { transactionId: session.payment_intent },
+            { $set: paymentRecord },
+            { upsert: true }
+          );
+
+          res.send({ success: true, message: "User upgraded to Premium" });
+        } else {
+          res.status(400).send({ message: "Payment not verified" });
+        }
+      } catch (err) {
+        res.status(500).send({ message: "Server Error", error: err.message });
       }
-      res.send({ message: "Payment verified successfully" });
-      //  console.log(session);
     });
 
     //get my lessons by email
@@ -184,10 +233,11 @@ async function run() {
 
     //get a user's role
     app.get("/user/role", verifyJWT, async (req, res) => {
-      console.log(req.tokenEmail);
-
       const result = await usersCollection.findOne({ email: req.tokenEmail });
-      res.send({ role: result?.role });
+      res.send({
+        role: result?.role || "user",
+        isPremium: result?.isPremium || false,
+      });
     });
     // get all users
     app.get("/users", verifyJWT, async (req, res) => {
@@ -329,22 +379,18 @@ async function run() {
         if (lesson.creator !== req.tokenEmail) {
           const user = await usersCollection.findOne({ email: req.tokenEmail });
           if (user.role !== "admin") {
-            return res
-              .status(403)
-              .send({
-                message: "You don't have permission to update this lesson",
-              });
+            return res.status(403).send({
+              message: "You don't have permission to update this lesson",
+            });
           }
         }
 
         if (accessLevel && accessLevel.toLowerCase() === "premium") {
           const user = await usersCollection.findOne({ email: req.tokenEmail });
           if (user.role !== "premium" && user.role !== "admin") {
-            return res
-              .status(403)
-              .send({
-                message: "Only premium users can set premium access level",
-              });
+            return res.status(403).send({
+              message: "Only premium users can set premium access level",
+            });
           }
         }
 
@@ -366,6 +412,50 @@ async function run() {
         console.error(error);
         res.status(500).send({ message: "Internal Server Error" });
       }
+    });
+    // Report Lesson API
+    app.post("/lessonsReports", async (req, res) => {
+      const report = req.body;
+      const result = await reportCollection.insertOne(report);
+      res.send(result);
+    });
+    //get report api
+    app.get("/lessonsReports", verifyJWT, async (req, res) => {
+      const reports = await reportCollection
+        .aggregate([
+          {
+            $addFields: {
+              lessonObjectId: { $toObjectId: "$lessonId" },
+            },
+          },
+          {
+            $lookup: {
+              from: "lessons",
+              localField: "lessonObjectId",
+              foreignField: "_id",
+              as: "lessonDetails",
+            },
+          },
+          { $unwind: "$lessonDetails" },
+          {
+            $project: {
+              lessonTitle: "$lessonDetails.title",
+              lessonId: 1,
+              reportedUserEmail: 1,
+              reason: 1,
+              timestamp: 1,
+            },
+          },
+        ])
+        .toArray();
+      res.send(reports);
+    });
+    //delete report api
+    app.delete("/lessonsReports/:id", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await reportCollection.deleteOne(query);
+      res.send(result);
     });
 
     // Send a ping to confirm a successful connection
