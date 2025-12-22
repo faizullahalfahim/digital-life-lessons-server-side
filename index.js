@@ -16,7 +16,8 @@ admin.initializeApp({
 // Middleware
 app.use(
   cors({
-    origin: ["https://digitallifelessons.netlify.app",process.env.SITE_DOMAIN], credentials:true
+    origin: ["https://digitallifelessons.netlify.app", process.env.SITE_DOMAIN],
+    credentials: true,
   })
 );
 app.use(express.json());
@@ -116,6 +117,18 @@ async function run() {
     app.get("/lessons", async (req, res) => {
       const lessons = await lessonsCollection.find().toArray();
       res.send(lessons);
+    });
+    //post lessons for public lessons
+
+    app.post("/lessons", async (req, res) => {
+      try {
+        const lessonData = req.body;
+        const result = await lessonsCollection.insertOne(lessonData);
+        res.send(result);
+      } catch (error) {
+        console.error("Error saving lesson:", error);
+        res.status(500).send({ message: "Failed to save lesson" });
+      }
     });
     //get lessons by id for details
     app.get("/lessons/:id", async (req, res) => {
