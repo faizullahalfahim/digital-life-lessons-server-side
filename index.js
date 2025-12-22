@@ -16,7 +16,7 @@ admin.initializeApp({
 // Middleware
 app.use(
   cors({
-    origin: [process.env.SITE_DOMAIN],
+    origin: ["https://digitallifelessons.netlify.app",process.env.SITE_DOMAIN], credentials:true
   })
 );
 app.use(express.json());
